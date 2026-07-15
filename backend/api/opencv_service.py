@@ -1,24 +1,4 @@
-"""
-Industrial Floor Plan Parser
 
-Designed for complex OT/Industrial floor plans.
-
-Pipeline
-
-Image
-    ↓
-Preprocessing
-    ↓
-Wall Extraction
-    ↓
-Gap Closing
-    ↓
-Connected Components
-    ↓
-Room Extraction
-    ↓
-Polygon Generation
-"""
 
 from __future__ import annotations
 
@@ -165,34 +145,36 @@ def remove_small_components(binary, config=DEFAULT_CONFIG):
 
 
 # -------------------------------------------------------
-# Extract horizontal / vertical walls
+# Rotated kernel bank for wall extraction
+# -------------------------------------------------------
+
+def _make_rotated_kernel(length, angle):
+    canvas_size = length + 4
+    canvas = np.zeros((canvas_size, canvas_size), dtype=np.uint8)
+    mid = canvas_size // 2
+    half = length // 2
+    canvas[mid, mid - half:mid - half + length] = 255
+    center = (canvas_size // 2, canvas_size // 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    return cv2.warpAffine(
+        canvas, M, (canvas_size, canvas_size),
+        flags=cv2.INTER_NEAREST, borderValue=0,
+    )
+
+
+# -------------------------------------------------------
+# Extract walls at all angles
 # -------------------------------------------------------
 
 def extract_walls(binary):
 
-    horizontal_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (45, 1),
-    )
+    kernel_length = 45
+    walls = np.zeros_like(binary)
 
-    vertical_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (1, 45),
-    )
-
-    horizontal = cv2.morphologyEx(
-        binary,
-        cv2.MORPH_OPEN,
-        horizontal_kernel,
-    )
-
-    vertical = cv2.morphologyEx(
-        binary,
-        cv2.MORPH_OPEN,
-        vertical_kernel,
-    )
-
-    walls = cv2.bitwise_or(horizontal, vertical)
+    for angle in range(0, 180, 15):
+        kernel = _make_rotated_kernel(kernel_length, angle)
+        opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        walls = cv2.bitwise_or(walls, opened)
 
     return walls
 
@@ -706,43 +688,6 @@ def extract_room_polygons(
 # Merge adjacent rooms
 # -------------------------------------------------------
 
-def merge_small_rooms(
-    rooms,
-    distance_threshold=15
-):
-
-    merged = []
-
-    used = set()
-
-    for i, room in enumerate(rooms):
-
-        if i in used:
-            continue
-
-        x1, y1 = room["centroid"]
-
-        current = room
-
-        for j, other in enumerate(rooms):
-
-            if j <= i or j in used:
-                continue
-
-            x2, y2 = other["centroid"]
-
-            d = np.sqrt(
-                (x1-x2)**2 +
-                (y1-y2)**2
-            )
-
-            if d < distance_threshold:
-
-                used.add(j)
-
-        merged.append(current)
-
-    return merged
 
 # -------------------------------------------------------
 # Main Pipeline

@@ -163,42 +163,51 @@ Returns the previously saved layout JSON, or 404 if none exists.
 
 ## OpenCV Processing Pipeline
 
-The room detection uses a classical computer vision pipeline with hierarchical contour analysis:
+The room detection uses a classical computer vision pipeline with rotated-kernel wall extraction and connected-component analysis:
 
 ```
 Input Image
     │
     ▼
-Grayscale Conversion
+Grayscale + Gaussian Blur (5×5) + Adaptive Threshold
     │
     ▼
-Gaussian Blur (5x5)          — reduces noise
+Remove Small Components       — drop noise blobs < 120 px
     │
     ▼
-Adaptive Threshold            — binary image: walls=white, rooms=black
+Extract Walls                 — morph open with 45-px kernels at 15° increments (0°–165°),
+    │                           OR all 12 results → captures horizontal, vertical, and diagonal walls
+    ▼
+Bridge Wall Gaps              — morph close (7×7, 3 iter) reconnects broken wall segments
     │
     ▼
-Morphological Close (5x5)    — bridges small gaps in walls
+Thicken Walls                 — dilate (3×3, 2 iter) for solid wall coverage
     │
     ▼
-findContours(RETR_TREE)      — all contours + parent/child hierarchy
+Compute Free Space            — invert (white = walkable, black = walls)
     │
     ▼
-Hierarchy Filtering           — rooms = direct children of the floor boundary
+Remove Outside Region         — flood fill from (0,0) erases the exterior
     │
     ▼
-Polygon Approximation         — cv2.approxPolyDP reduces vertex count
+Remove Thin Structures        — morph open (2×2) cleans residual slivers
     │
     ▼
-JSON Response                 — polygon coordinates for each room
+Connected Components          — cv2.connectedComponentsWithStats labels each room
+    │
+    ▼
+Filter Rooms                  — reject by area, aspect ratio, fill ratio
+    │
+    ▼
+Polygon Extraction            — cv2.findContours + approxPolyDP per room mask
 ```
 
 Key details:
 
-- `RETR_TREE` returns every contour with a hierarchy array (`[next, prev, child, parent]`)
-- The largest top-level contour (no parent) is identified as the floor boundary
-- Only direct children of the floor boundary are treated as rooms
-- Contours smaller than 0.1% of total image area are discarded as noise
+- **Rotated kernel bank**: `extract_walls` creates a 45-px horizontal line, embeds it in a canvas, and rotates it by each angle via `cv2.getRotationMatrix2D` + `cv2.warpAffine` (`INTER_NEAREST`). This preserves diagonal walls that would be lost by orthogonal-only morphology.
+- `bridge_wall_gaps` fills small breaks left by the opening; `thicken_walls` ensures walls are thick enough to block flood fill.
+- Flood fill from `(0,0)` removes only the exterior; enclosed rooms remain white in the free-space image.
+- `connectedComponentsWithStats` labels each contiguous free-space region; rooms with area < 800 px, extreme aspect ratios (< 0.12 or > 8), or low fill ratios (< 0.25) are discarded.
 
 ## Frontend Features
 
