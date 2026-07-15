@@ -2,14 +2,28 @@ import { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Group, Text } from 'react-konva';
 import Toolbar from './Toolbar';
 
-const ROOM_FILL = 'rgba(37, 99, 235, 0.2)';
-const ROOM_STROKE = '#1e293b';
+const ROOM_COLORS = [
+  { fill: 'rgba(59, 130, 246, 0.25)',  stroke: '#3b82f6', selected: 'rgba(59, 130, 246, 0.45)' },
+  { fill: 'rgba(16, 185, 129, 0.25)',  stroke: '#10b981', selected: 'rgba(16, 185, 129, 0.45)' },
+  { fill: 'rgba(245, 158, 11, 0.25)',  stroke: '#f59e0b', selected: 'rgba(245, 158, 11, 0.45)' },
+  { fill: 'rgba(239, 68, 68, 0.25)',   stroke: '#ef4444', selected: 'rgba(239, 68, 68, 0.45)' },
+  { fill: 'rgba(139, 92, 246, 0.25)',  stroke: '#8b5cf6', selected: 'rgba(139, 92, 246, 0.45)' },
+  { fill: 'rgba(236, 72, 153, 0.25)',  stroke: '#ec4899', selected: 'rgba(236, 72, 153, 0.45)' },
+  { fill: 'rgba(20, 184, 166, 0.25)',  stroke: '#14b8a6', selected: 'rgba(20, 184, 166, 0.45)' },
+  { fill: 'rgba(249, 115, 22, 0.25)',  stroke: '#f97316', selected: 'rgba(249, 115, 22, 0.45)' },
+  { fill: 'rgba(99, 102, 241, 0.25)',  stroke: '#6366f1', selected: 'rgba(99, 102, 241, 0.45)' },
+  { fill: 'rgba(34, 197, 94, 0.25)',   stroke: '#22c55e', selected: 'rgba(34, 197, 94, 0.45)' },
+  { fill: 'rgba(168, 85, 247, 0.25)',  stroke: '#a855f7', selected: 'rgba(168, 85, 247, 0.45)' },
+  { fill: 'rgba(251, 146, 60, 0.25)',  stroke: '#fb923c', selected: 'rgba(251, 146, 60, 0.45)' },
+];
 const ROOM_STROKE_WIDTH = 2;
-const SELECTED_FILL = 'rgba(37, 99, 235, 0.4)';
-const SELECTED_STROKE = '#2563eb';
 const VERTEX_FILL = '#2563eb';
 const VERTEX_RADIUS = 6;
 const LABEL_OFFSET = 0;
+
+export function getRoomColor(roomIndex) {
+  return ROOM_COLORS[roomIndex % ROOM_COLORS.length];
+}
 
 function getPolygonCenter(polygon) {
   const n = polygon.length;
@@ -213,8 +227,9 @@ export default function CanvasViewer({
           )}
 
           {/* Room polygons */}
-          {rooms.map((room) => {
+          {rooms.map((room, roomIndex) => {
             const isSelected = selectedRoomId === room.id;
+            const colors = getRoomColor(roomIndex);
             const flatPoints = room.polygon.flat();
             const { cx, cy } = getPolygonCenter(room.polygon);
 
@@ -223,9 +238,9 @@ export default function CanvasViewer({
                 {/* Filled polygon */}
                 <Line
                   points={flatPoints}
-                  fill={isSelected ? SELECTED_FILL : ROOM_FILL}
+                  fill={isSelected ? colors.selected : colors.fill}
                   closed
-                  stroke={isSelected ? SELECTED_STROKE : ROOM_STROKE}
+                  stroke={isSelected ? colors.stroke : colors.stroke}
                   strokeWidth={isSelected ? ROOM_STROKE_WIDTH + 1 : ROOM_STROKE_WIDTH}
                   onClick={() => onSelectRoom(room.id)}
                   onTap={() => onSelectRoom(room.id)}
@@ -249,8 +264,8 @@ export default function CanvasViewer({
                   pointerEvents="none"
                 />
 
-                {/* Editable vertex handles */}
-                {room.polygon.map((point, idx) => (
+                {/* Editable vertex handles — only visible when room is selected */}
+                {isSelected && room.polygon.map((point, idx) => (
                   <Circle
                     key={`${room.id}-v-${idx}`}
                     x={point[0]}

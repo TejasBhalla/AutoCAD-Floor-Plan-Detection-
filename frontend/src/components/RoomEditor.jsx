@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getRoomColor } from './CanvasViewer';
 
 export default function RoomEditor({ room, rooms, onUpdateName, onDeleteRoom, onSelectRoom, onSave, onAddPolygon }) {
   const [editName, setEditName] = useState('');
@@ -67,28 +68,37 @@ export default function RoomEditor({ room, rooms, onUpdateName, onDeleteRoom, on
       <div className="sidebar-section" style={{ flex: 1, overflow: 'auto' }}>
         <label>All Rooms ({rooms.length})</label>
         <ul className="room-list">
-          {rooms.map((r) => (
-            <li
-              key={r.id}
-              className={room && room.id === r.id ? 'selected' : ''}
-              onClick={() => onSelectRoom(r.id)}
-            >
-              <span className="room-label">
-                <span className="room-swatch" />
-                {r.name}
-              </span>
-              <button
-                className="delete-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteRoom(r.id);
-                }}
-                title="Delete room"
+          {rooms.map((r, idx) => {
+            const colors = getRoomColor(idx);
+            return (
+              <li
+                key={r.id}
+                className={room && room.id === r.id ? 'selected' : ''}
+                onClick={() => onSelectRoom(r.id)}
               >
-                ×
-              </button>
-            </li>
-          ))}
+                <span className="room-label">
+                  <span
+                    className="room-swatch"
+                    style={{
+                      background: colors.selected,
+                      borderColor: colors.stroke,
+                    }}
+                  />
+                  {r.name}
+                </span>
+                <button
+                  className="delete-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteRoom(r.id);
+                  }}
+                  title="Delete room"
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>
