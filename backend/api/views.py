@@ -34,10 +34,10 @@ class UploadFloorPlanView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        allowed_types = ['image/png', 'image/jpeg', 'image/jpg']
+        allowed_types = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml']
         if image_file.content_type not in allowed_types:
             return Response(
-                {"error": f"Unsupported file type: {image_file.content_type}. Use PNG or JPG."},
+                {"error": f"Unsupported file type: {image_file.content_type}. Use PNG, JPG, or SVG."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -48,11 +48,16 @@ class UploadFloorPlanView(APIView):
             # Save the uploaded image so the frontend can display it
             media_dir = os.path.join(settings.MEDIA_ROOT, 'floorplans')
             os.makedirs(media_dir, exist_ok=True)
-            image_path = os.path.join(media_dir, 'latest_floorplan.png')
+
+            if image_file.content_type == 'image/svg+xml':
+                image_path = os.path.join(media_dir, 'latest_floorplan.svg')
+            else:
+                image_path = os.path.join(media_dir, 'latest_floorplan.png')
+
             with open(image_path, 'wb') as f:
                 f.write(image_bytes)
 
-            result['image_url'] = '/media/floorplans/latest_floorplan.png'
+            result['image_url'] = f'/media/floorplans/{os.path.basename(image_path)}'
             return Response(result, status=status.HTTP_200_OK)
 
         except ValueError as e:

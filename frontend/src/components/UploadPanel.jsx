@@ -6,9 +6,9 @@ export default function UploadPanel({ onUpload, isProcessing }) {
 
   const handleFile = (file) => {
     if (!file) return;
-    const validTypes = ['image/png', 'image/jpeg', 'image/jpg'];
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml'];
     if (!validTypes.includes(file.type)) {
-      alert('Please upload a PNG or JPG image.');
+      alert('Please upload a PNG, JPG, or SVG image.');
       return;
     }
     onUpload(file);
@@ -47,7 +47,7 @@ export default function UploadPanel({ onUpload, isProcessing }) {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".png,.jpg,.jpeg"
+          accept=".png,.jpg,.jpeg,.svg"
           onChange={handleChange}
         />
         {isProcessing ? (
@@ -59,7 +59,7 @@ export default function UploadPanel({ onUpload, isProcessing }) {
         ) : (
           <>
             <h2>Upload Floor Plan</h2>
-            <p>Drag and drop a PNG or JPG image, or click to browse</p>
+            <p>Drag and drop a PNG, JPG, or SVG image, or click to browse</p>
             <button className="btn btn-primary">Choose File</button>
           </>
         )}

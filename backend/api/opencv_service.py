@@ -5,6 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import logging
+import resvg_py
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -36,7 +37,7 @@ class ParserConfig:
 
     max_room_area_ratio: float = 0.90
 
-    polygon_epsilon: float = 0.015
+    polygon_epsilon: float = 0.002  
 
     remove_text: bool = True
 
@@ -83,10 +84,37 @@ def odd(value):
 
 
 # -------------------------------------------------------
+# SVG to raster via resvg
+# -------------------------------------------------------
+
+def svg_to_image(svg_bytes, output_width=2200):
+
+    svg_string = svg_bytes.decode('utf-8', errors='replace')
+
+    png_bytes = resvg_py.svg_to_bytes(
+        svg_string=svg_string,
+        width=output_width,
+    )
+
+    data = np.frombuffer(png_bytes, np.uint8)
+    image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise ValueError("Failed to render SVG.")
+
+    return image
+
+
+# -------------------------------------------------------
 # Load image
 # -------------------------------------------------------
 
 def load_image(image_bytes):
+
+    head = image_bytes[:1000]
+
+    if b'<svg' in head or b'<SVG' in head:
+        return svg_to_image(image_bytes)
 
     data = np.frombuffer(image_bytes, np.uint8)
 
@@ -220,7 +248,7 @@ def thicken_walls(walls):
 
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
-        (3, 3)
+        (5, 5)
     )
 
     walls = cv2.dilate(
@@ -380,7 +408,7 @@ def filter_rooms(
 
         fill_ratio = area / float(w*h)
 
-        if aspect > 8:
+        if aspect > 80:
             continue
 
         if aspect < 0.12:
