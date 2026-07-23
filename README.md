@@ -161,53 +161,180 @@ GET /api/load-layout/
 
 Returns the previously saved layout JSON, or 404 if none exists.
 
-## OpenCV Processing Pipeline
+## OpenCV Service (`backend/api/opencv_service.py`)
 
-The room detection uses a classical computer vision pipeline with rotated-kernel wall extraction and connected-component analysis:
+The room detection engine is a pure classical computer vision pipeline — no ML models required. It uses rotated-kernel morphological wall extraction and connected-component analysis to identify enclosed rooms from floor plan images.
+
+### Supported Input Formats
+
+| Format | Handling |
+|--------|----------|
+| PNG / JPG | Decoded directly via `cv2.imdecode` |
+| SVG | Detected by checking the first 1000 bytes for `<svg`/`<SVG` tags, then rasterized to PNG via `resvg_py.svg_to_bytes` at 2200 px width before processing |
+
+### Configuration (`ParserConfig`)
+
+All tunable parameters live in the `ParserConfig` dataclass. A `DEFAULT_CONFIG` instance is used throughout the pipeline.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_processing_size` | `2200` | Longest edge after resize — keeps processing fast on large plans |
+| `adaptive_block_size` | `25` | Block size for adaptive threshold (must be odd) |
+| `adaptive_c` | `5` | Constant subtracted from adaptive threshold mean |
+| `gaussian_kernel` | `5` | Gaussian blur kernel size (must be odd) |
+| `wall_kernel` | `7` | Structural element size for gap bridging |
+| `bridge_iterations` | `3` | Morph-close iterations for wall bridging |
+| `min_component_area` | `120` | Minimum blob area (px) kept after initial cleanup |
+| `min_room_area` | `800` | Minimum area for a connected component to be a room |
+| `max_room_area_ratio` | `0.90` | Components larger than 90% of total image area are rejected |
+| `polygon_epsilon` | `0.002` | `approxPolyDP` simplification factor (fraction of perimeter) |
+| `remove_text` | `True` | Flag for text removal (reserved for future use) |
+| `debug` | `False` | When `True`, shows intermediate images via `cv2.imshow` |
+
+### Processing Pipeline
 
 ```
-Input Image
+Input Image (bytes)
     │
     ▼
-Grayscale + Gaussian Blur (5×5) + Adaptive Threshold
+load_image()                    — auto-detect SVG vs raster, decode to BGR numpy array
     │
     ▼
-Remove Small Components       — drop noise blobs < 120 px
+resize_for_processing()         — scale longest edge to ≤ 2200 px (returns image + scale factor)
     │
     ▼
-Extract Walls                 — morph open with 45-px kernels at 15° increments (0°–165°),
-    │                           OR all 12 results → captures horizontal, vertical, and diagonal walls
-    ▼
-Bridge Wall Gaps              — morph close (7×7, 3 iter) reconnects broken wall segments
+preprocess()
+  ├─ cv2.cvtColor → grayscale
+  ├─ cv2.GaussianBlur (5×5)
+  └─ cv2.adaptiveThreshold (GAUSSIAN_C, BINARY_INV, block=25, C=5)
     │
     ▼
-Thicken Walls                 — dilate (3×3, 2 iter) for solid wall coverage
+remove_small_components()       — cv2.connectedComponentsWithStats → drop blobs < 120 px
     │
     ▼
-Compute Free Space            — invert (white = walkable, black = walls)
+extract_walls()
+  └─ For each angle in [0, 15, 30, …, 165]:
+       ├─ _make_rotated_kernel(45, angle)
+       │    └─ draw 45-px line on canvas → cv2.getRotationMatrix2D → cv2.warpAffine (INTER_NEAREST)
+       ├─ cv2.morphologyEx(MORPH_OPEN, kernel)
+       └─ cv2.bitwise_or into accumulator
     │
     ▼
-Remove Outside Region         — flood fill from (0,0) erases the exterior
+bridge_wall_gaps()              — cv2.morphologyEx(MORPH_CLOSE, 7×7 rect, iterations=3)
     │
     ▼
-Remove Thin Structures        — morph open (2×2) cleans residual slivers
+thicken_walls()                 — cv2.dilate(5×5 rect, iterations=2)
     │
     ▼
-Connected Components          — cv2.connectedComponentsWithStats labels each room
+compute_free_space()            — cv2.bitwise_not (white = walkable, black = walls)
     │
     ▼
-Filter Rooms                  — reject by area, aspect ratio, fill ratio
+remove_outside_region()         — cv2.floodFill from (0,0) with seed=0 → erases exterior
     │
     ▼
-Polygon Extraction            — cv2.findContours + approxPolyDP per room mask
+remove_thin_structures()        — cv2.morphologyEx(MORPH_OPEN, 2×2 rect) → removes slivers
+    │
+    ▼
+detect_room_components()        — cv2.connectedComponentsWithStats (connectivity=8)
+    │                              filter by min_room_area (800) and max_room_area_ratio (0.90)
+    ▼
+filter_rooms()                  — reject rooms by aspect ratio and fill ratio:
+    │                              corridor-like (aspect > 8 or < 0.12): fill_ratio < 0.5 → reject
+    │                              normal rooms: fill_ratio < 0.25 → reject
+    ▼
+extract_room_polygons()         — per room:
+    ├─ largest_contour()        — cv2.findContours(RETR_EXTERNAL, CHAIN_APPROX_NONE) → pick largest
+    ├─ contour_to_polygon()     — cv2.approxPolyDP (epsilon = 0.002 × perimeter)
+    ├─ clean_polygon()          — remove consecutive duplicate vertices + closing duplicate
+    ├─ scale_polygon()          — map coordinates back to original image scale
+    └─ attach centroid, bbox, area
+    │
+    ▼
+Returns { image_width, image_height, room_count, rooms[] }
 ```
 
-Key details:
+### Key Functions
 
-- **Rotated kernel bank**: `extract_walls` creates a 45-px horizontal line, embeds it in a canvas, and rotates it by each angle via `cv2.getRotationMatrix2D` + `cv2.warpAffine` (`INTER_NEAREST`). This preserves diagonal walls that would be lost by orthogonal-only morphology.
-- `bridge_wall_gaps` fills small breaks left by the opening; `thicken_walls` ensures walls are thick enough to block flood fill.
-- Flood fill from `(0,0)` removes only the exterior; enclosed rooms remain white in the free-space image.
-- `connectedComponentsWithStats` labels each contiguous free-space region; rooms with area < 800 px, extreme aspect ratios (< 0.12 or > 8), or low fill ratios (< 0.25) are discarded.
+#### Image Loading
+
+- **`load_image(image_bytes)`** — Inspects the first 1000 bytes for SVG markers. SVGs are rasterized via `resvg_py`; rasters are decoded with `cv2.imdecode`. Raises `ValueError` on failure.
+- **`svg_to_image(svg_bytes, output_width=2200)`** — Renders SVG to PNG bytes at the target width, then decodes to a BGR numpy array.
+- **`resize_for_processing(image, max_size)`** — Scales the longest edge to `max_size` using `cv2.INTER_AREA`. Returns the resized image and the scale factor (1.0 if no resize needed).
+
+#### Preprocessing
+
+- **`preprocess(image, config)`** — Grayscale → Gaussian blur → adaptive threshold. Produces a clean binary image where wall/line pixels are white (255).
+- **`odd(value)`** — Ensures a kernel size is odd and ≥ 3.
+
+#### Wall Extraction
+
+- **`extract_walls(binary)`** — The core innovation. Creates a 45-pixel horizontal line kernel, embeds it in a square canvas, and rotates it to 12 angles (0° through 165° in 15° steps) using `cv2.getRotationMatrix2D` + `cv2.warpAffine` with `INTER_NEAREST`. Each rotated kernel is applied via morphological opening, and results are OR'd together. This captures walls at any orientation — horizontal, vertical, and diagonal — which orthogonal-only morphology would miss.
+- **`_make_rotated_kernel(length, angle)`** — Builds a single rotated line kernel. Draws a horizontal line on a zero canvas, rotates by the given angle, and returns the result.
+
+#### Wall Cleanup
+
+- **`bridge_wall_gaps(walls, config)`** — Morphological closing with a 7×7 rectangular kernel, 3 iterations. Reconnects small breaks in wall segments caused by the opening step.
+- **`thicken_walls(walls)`** — Dilation with a 5×5 rectangular kernel, 2 iterations. Ensures walls are thick enough to act as barriers for flood fill.
+
+#### Room Detection
+
+- **`compute_free_space(walls)`** — Simple bitwise invert. White pixels become walkable/room space; black pixels become walls.
+- **`remove_outside_region(free_space)`** — Flood fill starting from pixel (0,0). Fills the connected exterior region with black, leaving only enclosed rooms white.
+- **`remove_thin_structures(binary)`** — Morphological opening with a 2×2 kernel. Removes thin slivers and noise left over from earlier steps.
+- **`detect_room_components(free_space, config)`** — Labels connected components (8-connectivity) via `cv2.connectedComponentsWithStats`. Filters by absolute area and maximum area ratio. Returns a list of dicts with `id`, `bbox`, `area`, and `mask`.
+- **`filter_rooms(rooms, config)`** — Applies geometric heuristics:
+  - **Corridor-like** (aspect ratio > 8 or < 0.12): rejected if fill ratio < 0.5
+  - **Normal rooms**: rejected if fill ratio < 0.25
+
+#### Polygon Extraction
+
+- **`largest_contour(mask)`** — Finds external contours and returns the one with the largest area.
+- **`contour_to_polygon(contour, config)`** — Simplifies a contour to a polygon using `cv2.approxPolyDP` with epsilon = 0.002 × perimeter. Returns a list of `[x, y]` integer pairs.
+- **`clean_polygon(points)`** — Removes consecutive duplicate vertices and the closing duplicate (if first == last).
+- **`scale_polygon(polygon, scale)`** — Maps polygon coordinates back to the original image resolution by dividing by the scale factor.
+- **`extract_room_polygons(rooms, scale, config)`** — Orchestrates the full extraction: for each room, finds the largest contour, simplifies it, cleans it, scales it, and computes centroid/bbox/area. Returns the final room list.
+
+#### Geometry Helpers
+
+| Function | Description |
+|----------|-------------|
+| `contour_centroid(contour)` | Computes centroid via `cv2.moments`, falls back to bounding rect center |
+| `contour_bbox(contour)` | Returns `(x, y, w, h)` via `cv2.boundingRect` |
+| `polygon_area(contour)` | Returns area via `cv2.contourArea` |
+
+#### Debug & Visualization
+
+- **`show(title, image, config)`** — Displays an image in a window when `config.debug` is `True`. No-op otherwise.
+- **`draw_rooms_on_image(image_bytes, rooms)`** — Draws filled semi-transparent colored overlays, black polygon outlines, red centroid dots, and room name labels on a copy of the original image. Returns JPEG-encoded bytes.
+- **`room_statistics(rooms)`** — Returns `count`, `average_area`, and `largest_area` for a list of rooms.
+
+#### Main Entry Point
+
+- **`process_floorplan(image_bytes, config=DEFAULT_CONFIG)`** — The top-level function called by the Django view. Runs the full pipeline (load → resize → preprocess → segment → extract polygons) and returns:
+  ```json
+  {
+    "image_width": 1200,
+    "image_height": 900,
+    "room_count": 5,
+    "rooms": [
+      {
+        "id": 1,
+        "name": "Room 1",
+        "polygon": [[120, 80], [420, 80], [420, 300], [120, 300]],
+        "centroid": [270, 190],
+        "bbox": [120, 80, 300, 220],
+        "area": 52800
+      }
+    ]
+  }
+  ```
+
+### Design Rationale
+
+- **No ML dependency**: The entire pipeline is classical CV — no model files, no GPU, no training data. This makes deployment simple and reproducible.
+- **Rotated kernel bank**: Floor plans often contain walls at non-orthogonal angles (e.g., angled rooms, bay windows). A 12-angle kernel bank at 15° intervals covers all practical wall orientations while keeping processing fast.
+- **Flood fill exterior removal**: By inverting the wall image and flood-filling from the image corner, we cleanly separate interior rooms from the background without needing to detect the building outline explicitly.
+- **Two-pass filtering**: First by absolute area (removes tiny artifacts), then by geometric shape (aspect ratio + fill ratio) to reject corridor-like fragments and sparse noise that survived the morphological steps.
 
 ## Frontend Features
 

@@ -197,9 +197,10 @@ def _make_rotated_kernel(length, angle):
 def extract_walls(binary):
 
     kernel_length = 45
+    
     walls = np.zeros_like(binary)
 
-    for angle in range(0, 180, 15):
+    for angle in range(0, 180, 5):
         kernel = _make_rotated_kernel(kernel_length, angle)
         opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
         walls = cv2.bitwise_or(walls, opened)
@@ -387,44 +388,7 @@ def remove_thin_structures(binary):
 
     return opened
 
-# -------------------------------------------------------
-# Reject unlikely rooms
-# -------------------------------------------------------
 
-def filter_rooms(
-    rooms,
-    config=DEFAULT_CONFIG
-):
-
-    filtered = []
-
-    for room in rooms:
-
-        x,y,w,h = room["bbox"]
-
-        area = room["area"]
-
-        aspect = w / float(h)
-
-        fill_ratio = area / float(w*h)
-
-        if aspect > 80:
-            continue
-
-        if aspect < 0.12:
-            continue
-
-        if fill_ratio < 0.25:
-            continue
-
-        filtered.append(room)
-
-    logger.info(
-        "%d rooms remaining",
-        len(filtered)
-    )
-
-    return filtered
 
 # -------------------------------------------------------
 # Segment Rooms
@@ -468,10 +432,6 @@ def segment_rooms(
         config
     )
 
-    rooms = filter_rooms(
-        rooms,
-        config
-    )
 
     return rooms
 
@@ -712,9 +672,7 @@ def extract_room_polygons(
 
     return output
 
-# -------------------------------------------------------
-# Merge adjacent rooms
-# -------------------------------------------------------
+
 
 
 # -------------------------------------------------------
